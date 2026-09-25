@@ -1,0 +1,13 @@
+{
+  "name": "price-ai-system",
+  "version": "1.0.0",
+  "description": "A zero-cost, multi-tenant Flask-based price intelligence system that: - ingests product documents (PDF, image, Excel, CSV), - extracts product metadata with a local OCR + LLM pattern, - stores embeddings locally with SentenceTransformers, - searches with Supabase pgvector cosine similarity, - serves authenticated admin/user flows via Flask and Supabase Auth.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}

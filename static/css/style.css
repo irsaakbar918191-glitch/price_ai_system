@@ -1,0 +1,66 @@
+body {
+    background: linear-gradient(135deg, #0f172a 0%, #111827 50%, #1f2937 100%);
+    min-height: 100vh;
+    color: #e5e7eb;
+    font-family: Arial, sans-serif;
+}
+
+.card {
+    background: rgba(17, 24, 39, 0.8);
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    backdrop-filter: blur(10px);
+}
+
+.chat-message {
+    border-radius: 1rem;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.chat-user {
+    background: rgba(37, 99, 235, 0.18);
+    border-left: 4px solid #60a5fa;
+}
+
+.chat-ai {
+    background: rgba(16, 185, 129, 0.12);
+    border-left: 4px solid #34d399;
+}
+
+.price-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    padding: 0.25rem 0.6rem;
+}
+
+.drag-area {
+    border: 2px dashed rgba(148, 163, 184, 0.7);
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.35);
+    transition: all 0.2s ease;
+}
+
+.drag-area.dragover {
+    border-color: #38bdf8;
+    background: rgba(14, 116, 144, 0.16);
+}
+
+.drag-area.attached {
+    border-color: #34d399;
+    background: rgba(16, 185, 129, 0.12);
+}
+
+.product-card {
+    border: 1px solid rgba(148, 163, 184, 0.2);
+    border-radius: 1rem;
+    background: rgba(15, 23, 42, 0.6);
+    padding: 1rem;
+    margin-top: 1rem;
+}
+
+.hidden {
+    display: none !important;
+}

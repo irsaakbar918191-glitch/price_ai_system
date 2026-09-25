@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div id="loginForm" class="hidden"></div>
+<div id="dashboard" class="max-w-7xl mx-auto px-4 py-8">
+  <header class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+    <div>
+      <p class="text-sm uppercase tracking-[0.2em] text-sky-300">Price AI</p>
+      <h1 class="text-3xl font-bold text-white">Smart Price Database</h1>
+    </div>
+    <button id="logoutBtn" class="rounded-xl border border-slate-600 px-4 py-2 text-slate-200 hover:bg-slate-800">
+      Logout
+    </button>
+  </header>
+
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <section class="card rounded-2xl p-5 lg:col-span-1">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold text-white">Upload Product File</h2>
+        <span class="text-xs uppercase text-emerald-300">Admin Only</span>
+      </div>
+
+      <form id="uploadForm" class="space-y-4">
+        <div id="dragArea" class="drag-area p-6 text-center cursor-pointer">
+          <p id="dropText" class="text-slate-200">Drag & drop file here</p>
+          <p id="dropHint" class="text-xs text-slate-400 mt-2">PDF, image, Excel, or CSV</p>
+          <input id="fileInput" type="file" class="hidden" accept=".pdf,.png,.jpg,.jpeg,.xlsx,.xls,.csv" />
+        </div>
+        <p id="selectedFileName" class="mt-2 text-xs text-sky-300 min-h-[1.25rem]"></p>
+        <button type="submit" class="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium py-3">
+          Process & Store
+        </button>
+      </form>
+      <p id="uploadStatus" class="mt-4 text-sm text-slate-300 min-h-[1.5rem]"></p>
+    </section>
+
+    <section class="card rounded-2xl p-5 lg:col-span-2">
+      <div class="flex items-center justify-between mb-4">
+        <h2 class="text-xl font-semibold text-white">AI Product Search</h2>
+        <span class="text-sm text-sky-300">RAG + Vector Match</span>
+      </div>
+
+      <form id="chatForm" class="flex gap-3 mb-4">
+        <input id="chatInput" type="text" class="flex-1 rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500" placeholder="Samsung 55 inch TV ki price kya hai?" />
+        <button type="submit" class="rounded-xl bg-sky-600 hover:bg-sky-500 px-5 py-3 text-white font-medium">Search</button>
+      </form>
+
+      <div id="chatMessages" class="space-y-3 max-h-[420px] overflow-y-auto pr-2">
+        <div class="chat-message chat-ai">Ask for a product price and I’ll compare the stored catalog.</div>
+      </div>
+    </section>
+  </div>
+
+  <section class="mt-8 card rounded-2xl p-5">
+    <h2 class="text-xl font-semibold text-white mb-4">Matched Product Records</h2>
+    <div id="searchResults" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4"></div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/auth.js') }}"></script>
+<script src="{{ url_for('static', filename='js/upload.js') }}"></script>
+<script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const token = localStorage.getItem('price_ai_token');
+    if (!token) {
+      window.location.href = '/login';
+      return;
+    }
+
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) {
+      logoutBtn.addEventListener('click', () => {
+        localStorage.removeItem('price_ai_token');
+        window.location.href = '/login';
+      });
+    }
+  });
+</script>
+{% endblock %}

@@ -11,7 +11,7 @@ pytesseract==0.3.13
 sentence-transformers==3.1.0
 transformers==4.44.2
 torch==2.4.1
-numpy==2.1.2
+numpy==1.26.4
 python-dateutil==2.9.0.post0
 PyJWT==2.9.0
 gunicorn

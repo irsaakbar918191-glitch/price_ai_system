@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+# Tesseract OCR aur System Dependencies install karne ke liye
+RUN apt-get update && apt-get install -y \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Requirements install karein
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir gunicorn
+
+# Poora application code copy karein
+COPY . .
+
+# Hugging Face Spaces ka default port 7860 hota hai
+ENV PORT=8000
+
+# Gunicorn WSGI server se app run karein
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:${PORT} app:app"]

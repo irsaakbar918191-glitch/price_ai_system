@@ -1,12 +1,4 @@
-.git
-.gitignore
-.env
-.env.*
-!.env.example
-.venv
-venv
-__pycache__
+venv/
+__pycache__/
 *.pyc
-uploads
-*.log
-.vscode
+.git/

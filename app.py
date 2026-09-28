@@ -7,11 +7,13 @@ from routes.product_routes import product_bp
 from routes.upload_routes import upload_bp
 from routes.search_routes import search_bp
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 def create_app():
     app = Flask(
         __name__,
-        static_folder="static",
-        template_folder="templates"
+        static_folder=os.path.join(BASE_DIR, "static"),
+        template_folder=os.path.join(BASE_DIR, "templates")
     )
     app.config.from_object(Config)
 

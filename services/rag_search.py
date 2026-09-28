@@ -1,82 +1,91 @@
-from __future__ import annotations
-
-from typing import Any, Dict, List
-
-from database.supabase_client import SupabaseClient
+from database.supabase_client import get_supabase
 from services.embedding_service import EmbeddingService
+from groq import Groq
+from config import Config
+import requests
 
+class RAGSearch:
+    @staticmethod
+    def ask_price_assistant(query: str, user_id: str = None) -> dict:
+        supabase = get_supabase()
+        query_vector = EmbeddingService.get_embedding(query)
 
-class RAGSearchService:
-    def __init__(self, client=None):
-        self.client = client or SupabaseClient.get_client()
+        matched_products = []
+        try:
+            res = supabase.rpc("match_products", {
+                "query_embedding": query_vector,
+                "match_threshold": 0.05,
+                "match_count": 6
+            }).execute()
+            matched_products = res.data or []
+        except Exception:
+            try:
+                res = supabase.table("products").select("id, title, description, category, price, currency, stock").limit(6).execute()
+                matched_products = res.data or []
+            except Exception:
+                matched_products = []
 
-    def generate_query_embedding(self, query: str) -> List[float]:
-        return EmbeddingService.embed_text(query)
+        context_items = []
+        for p in matched_products:
+            context_items.append(
+                f"- Product: {p.get('title')} | Price: {p.get('currency', 'PKR')} {p.get('price')} | Stock: {p.get('stock')} | Category: {p.get('category')} | Info: {p.get('description', '')}"
+            )
+        context_str = "\n".join(context_items) if context_items else "No direct database match found."
 
-    def search_products(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
-        query_embedding = self.generate_query_embedding(query)
-        response = self.client.rpc(
-            "match_products",
-            {
-                "query_embedding": query_embedding,
-                "match_count": limit,
-            },
-        ).execute()
+        system_prompt = f"""You are a professional AI Price Intelligence Assistant for the marketplace.
+Default Currency: {Config.DEFAULT_CURRENCY}
+Provide accurate, actionable pricing comparisons, stock availability, and market insights based on the available inventory.
+Keep your response clear, well-structured, and helpful.
 
-        if hasattr(response, "data"):
-            return response.data or []
-        return response
+Available Inventory Context:
+{context_str}
+"""
 
-    def get_product_history(self, product_id: int) -> List[Dict[str, Any]]:
-        response = self.client.table("products").select("*").eq("id", product_id).execute()
-        if hasattr(response, "data"):
-            dataset = response.data or []
-            if not dataset:
-                return []
-            result = dataset[0]
-            product_name = result.get("product_name")
-            records = self.client.table("products").select("*").eq("product_name", product_name).order("date", desc=False).execute()
-            if hasattr(records, "data"):
-                return records.data or []
-        return []
+        answer = RAGSearch._call_llm(system_prompt, query)
 
-    def build_answer(self, query: str, matches: List[Dict[str, Any]]) -> Dict[str, Any]:
-        if not matches:
-            return {
-                "answer": "I couldn’t find a matching product in the catalog yet. Please upload fresh price data for the product.",
-                "products": [],
-            }
-
-        best = matches[0]
-        product_id = best.get("id")
-        product_name = best.get("product_name", "Product")
-        model = best.get("model") or ""
-        supplier = best.get("supplier") or "Unknown Supplier"
-        price = best.get("price", 0)
-        currency = best.get("currency", "PKR")
-        date = best.get("date") or "N/A"
-
-        history = self.get_product_history(product_id)
-        price_trend = [str(record.get("price")) for record in history[:5]]
-        answer = (
-            f"I found {product_name} {f'({model})' if model else ''}. "
-            f"The latest listed price is {currency} {price:.2f} from {supplier}. "
-            f"The latest record date is {date}. "
-            f"Recent price history: {', '.join(price_trend) if price_trend else 'No prior prices available.'}"
-        )
+        try:
+            supabase.table("chat_history").insert([
+                {"user_id": user_id, "role": "user", "content": query},
+                {"user_id": user_id, "role": "assistant", "content": answer}
+            ]).execute()
+        except Exception:
+            pass
 
         return {
             "answer": answer,
-            "products": [
-                {
-                    "id": product_id,
-                    "product_name": product_name,
-                    "model": model,
-                    "supplier": supplier,
-                    "price": price,
-                    "currency": currency,
-                    "date": date,
-                    "history": history,
-                }
-            ],
+            "relevant_products": matched_products
         }
+
+    @staticmethod
+    def _call_llm(system_prompt: str, user_query: str) -> str:
+        if Config.GROQ_API_KEY:
+            client = Groq(api_key=Config.GROQ_API_KEY)
+            models_to_try = [Config.GROQ_MODEL, "llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+            for model_name in models_to_try:
+                try:
+                    completion = client.chat.completions.create(
+                        messages=[
+                            {"role": "system", "content": system_prompt},
+                            {"role": "user", "content": user_query}
+                        ],
+                        model=model_name,
+                        temperature=0.3
+                    )
+                    return completion.choices[0].message.content
+                except Exception:
+                    continue
+
+        if Config.HF_API_TOKEN:
+            try:
+                url = f"https://api-inference.huggingface.co/models/{Config.HF_MODEL}"
+                headers = {"Authorization": f"Bearer {Config.HF_API_TOKEN}"}
+                prompt = f"{system_prompt}\nUser: {user_query}\nAssistant:"
+                res = requests.post(url, headers=headers, json={"inputs": prompt, "parameters": {"max_new_tokens": 512}}, timeout=20)
+                if res.status_code == 200:
+                    data = res.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        return data[0].get("generated_text", "").split("Assistant:")[-1].strip()
+            except Exception:
+                pass
+
+        return f"Found product match in database, but LLM connection unavailable!. Matching items:\n{system_prompt}"

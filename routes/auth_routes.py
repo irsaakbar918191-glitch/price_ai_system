@@ -1,42 +1,85 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, request, jsonify, session
+from database.supabase_client import get_public_supabase
 
-from database.supabase_client import SupabaseClient
+auth_bp = Blueprint("auth_bp", __name__)
 
-auth_bp = Blueprint("auth", __name__)
+def check_admin_status(user):
+    if not user:
+        return False
+    user_meta = getattr(user, "user_metadata", {}) or {}
+    app_meta = getattr(user, "app_metadata", {}) or {}
+    return user_meta.get("role") == "admin" or app_meta.get("role") == "admin"
 
-
-@auth_bp.post("/api/auth/register")
-def register():
-    try:
-        data = request.get_json(silent=True) or {}
-        email = (data.get("email") or "").strip()
-        password = data.get("password") or ""
-        if not email or not password:
-            return jsonify({"error": "Email and password are required."}), 400
-
-        client = SupabaseClient.get_client()
-        response = client.auth.sign_up({"email": email, "password": password})
-        return jsonify({"message": "Registration successful", "user": response.user.model_dump() if response.user else None}), 201
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
-
-
-@auth_bp.post("/api/auth/login")
+@auth_bp.route("/api/auth/login", methods=["POST"])
 def login():
-    try:
-        data = request.get_json(silent=True) or {}
-        email = (data.get("email") or "").strip()
-        password = data.get("password") or ""
-        if not email or not password:
-            return jsonify({"error": "Email and password are required."}), 400
+    data = request.get_json() or {}
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
 
-        client = SupabaseClient.get_client()
-        response = client.auth.sign_in_with_password({"email": email, "password": password})
-        token = response.session.access_token if response.session else None
-        return jsonify({
-            "message": "Login successful",
-            "token": token,
-            "user": response.user.model_dump() if response.user else None,
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+
+    try:
+        supabase = get_public_supabase()
+        res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+        if res.user:
+            is_adm = check_admin_status(res.user)
+            session["user_id"] = res.user.id
+            session["user_email"] = res.user.email
+            session["is_admin"] = is_adm
+
+            return jsonify({
+                "message": "Login successful",
+                "user": {
+                    "id": res.user.id,
+                    "email": res.user.email,
+                    "is_admin": is_adm
+                }
+            }), 200
+        return jsonify({"error": "Invalid credentials"}), 401
+    except Exception as e:
+        return jsonify({"error": str(e)}), 401
+
+@auth_bp.route("/api/auth/register", methods=["POST"])
+def register():
+    data = request.get_json() or {}
+    email = data.get("email", "").strip()
+    password = data.get("password", "").strip()
+
+    if not email or not password:
+        return jsonify({"error": "Email and password are required."}), 400
+
+    try:
+        supabase = get_public_supabase()
+        res = supabase.auth.sign_up({
+            "email": email, 
+            "password": password,
+            "options": {"data": {"role": "user"}}
         })
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        if res.user:
+            session["user_id"] = res.user.id
+            session["user_email"] = res.user.email
+            session["is_admin"] = False
+            return jsonify({
+                "message": "Registration successful",
+                "user": {"id": res.user.id, "email": res.user.email, "is_admin": False}
+            }), 201
+        return jsonify({"error": "Registration failed"}), 400
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+@auth_bp.route("/api/auth/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return jsonify({"message": "Logged out successfully"}), 200
+
+@auth_bp.route("/api/auth/me", methods=["GET"])
+def get_current_user():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"authenticated": False, "is_admin": False}), 200
+    return jsonify({
+        "authenticated": True,
+        "is_admin": session.get("is_admin", False),
+        "user": {"id": user_id, "email": session.get("user_email")}
+    }), 200

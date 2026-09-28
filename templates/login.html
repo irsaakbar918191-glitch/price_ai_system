@@ -1,54 +1,31 @@
-{% extends 'base.html' %}
+{% extends "base.html" %}
+
+{% block title %}Account Access | Price AI{% endblock %}
 
 {% block content %}
-<div class="flex items-center justify-center min-h-screen px-4">
-  <div class="w-full max-w-md card rounded-2xl p-8 shadow-2xl">
-    <div class="mb-6 text-center">
-      <h1 class="text-3xl font-bold text-white">Price AI Login</h1>
-      <p class="text-slate-300 mt-2">Secure access to the smart pricing database</p>
+<div class="auth-wrapper">
+    <div class="auth-card">
+        <div class="auth-header">
+            <i class="fa-solid fa-shield-halved auth-icon"></i>
+            <h2 id="auth-title">Welcome Back</h2>
+            <p id="auth-desc">Login to manage prices and inventory intelligence</p>
+        </div>
+        <form id="auth-form">
+            <div class="form-group">
+                <label>Email Address</label>
+                <input type="email" id="auth-email" required placeholder="you@company.com">
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" id="auth-password" required placeholder="••••••••">
+            </div>
+            <button type="submit" class="btn btn-primary btn-block" id="auth-submit-btn">Login</button>
+            <div id="auth-alert" class="status-msg"></div>
+        </form>
+        <div class="auth-switch">
+            <span id="auth-toggle-text">Don't have an account?</span>
+            <button type="button" class="link-btn" id="toggle-auth-mode">Sign Up</button>
+        </div>
     </div>
-
-    <form id="loginForm" class="space-y-5">
-      <div>
-        <label class="block text-sm font-medium text-slate-200 mb-2">Email</label>
-        <input id="emailInput" type="email" class="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500" placeholder="admin@example.com" required />
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-slate-200 mb-2">Password</label>
-        <input id="passwordInput" type="password" class="w-full rounded-xl border border-slate-600 bg-slate-900 px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-sky-500" placeholder="••••••••" required />
-      </div>
-      <button type="submit" class="w-full rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-medium py-3 transition">
-        Sign In
-      </button>
-      <p id="loginStatus" class="text-sm text-red-400 min-h-[1.25rem]"></p>
-    </form>
-  </div>
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  const form = document.getElementById('loginForm');
-  const status = document.getElementById('loginStatus');
-
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const email = document.getElementById('emailInput').value;
-    const password = document.getElementById('passwordInput').value;
-
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Login failed');
-      localStorage.setItem('price_ai_token', data.token || '');
-      window.location.href = '/';
-    } catch (error) {
-      status.textContent = error.message;
-    }
-  });
-</script>
 {% endblock %}

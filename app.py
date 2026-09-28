@@ -1,43 +1,42 @@
 import os
-from flask import Flask, jsonify, render_template
+from flask import Flask, render_template
+from flask_cors import CORS
 from config import Config
 from routes.auth_routes import auth_bp
+from routes.product_routes import product_bp
 from routes.upload_routes import upload_bp
 from routes.search_routes import search_bp
-from routes.product_routes import product_bp
-
 
 def create_app():
-    app = Flask(__name__, template_folder="templates", static_folder="static")
+    app = Flask(
+        __name__,
+        static_folder="static",
+        template_folder="templates"
+    )
     app.config.from_object(Config)
 
-    # Registering Blueprints
+    CORS(app, supports_credentials=True)
+
     app.register_blueprint(auth_bp)
+    app.register_blueprint(product_bp)
     app.register_blueprint(upload_bp)
     app.register_blueprint(search_bp)
-    app.register_blueprint(product_bp)
 
-    @app.get("/")
+    @app.route("/")
     def index():
         return render_template("index.html")
 
-    @app.get("/login")
+    @app.route("/login")
     def login_page():
         return render_template("login.html")
 
-    @app.get("/health")
-    def health_check():
-        return jsonify({"status": "ok", "service": "price-ai-system"}), 200
+    @app.errorhandler(404)
+    def not_found(e):
+        return render_template("index.html"), 200
 
     return app
 
-
 app = create_app()
 
-
 if __name__ == "__main__":
-    # Safe port and debug defaults
-    port = int(getattr(Config, "PORT", 5000))
-    debug = bool(getattr(Config, "DEBUG", True))
-
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    app.run(host="0.0.0.0", port=Config.PORT, debug=Config.DEBUG)

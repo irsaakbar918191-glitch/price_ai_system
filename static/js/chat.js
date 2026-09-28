@@ -1,73 +1,98 @@
-const chatForm = document.getElementById('chatForm');
-const chatInput = document.getElementById('chatInput');
-const chatMessages = document.getElementById('chatMessages');
-const searchResults = document.getElementById('searchResults');
+document.addEventListener("DOMContentLoaded", () => {
+    setupChat();
+});
 
-function appendMessage(role, text) {
-  const message = document.createElement('div');
-  message.className = `chat-message ${role === 'user' ? 'chat-user' : 'chat-ai'}`;
-  message.textContent = text;
-  chatMessages.appendChild(message);
-  chatMessages.scrollTop = chatMessages.scrollHeight;
-}
+function setupChat() {
+    const chatForm = document.getElementById("chat-form");
+    const chatInput = document.getElementById("chat-input");
+    const chatBox = document.getElementById("chat-box");
+    const globalSearch = document.getElementById("global-search");
 
-function renderProducts(products) {
-  if (!searchResults) return;
-  searchResults.innerHTML = '';
-
-  products.forEach((product) => {
-    const card = document.createElement('div');
-    card.className = 'product-card';
-    card.innerHTML = `
-      <div class="flex justify-between items-center">
-        <h3 class="text-lg font-semibold text-white">${product.product_name}</h3>
-        <span class="price-pill bg-green-500/20 text-green-300">${product.currency} ${Number(product.price || 0).toFixed(2)}</span>
-      </div>
-      <div class="mt-2 text-sm text-slate-300">
-        <p>Model: ${product.model || 'N/A'}</p>
-        <p>Supplier: ${product.supplier || 'N/A'}</p>
-        <p>Date: ${product.date || 'N/A'}</p>
-      </div>
-      <div class="mt-3 flex flex-wrap gap-2">
-        ${(product.history || []).slice(0, 5).map((item) => `
-          <span class="price-pill bg-slate-700 text-slate-200">${item.currency || product.currency} ${Number(item.price || 0).toFixed(2)}</span>
-        `).join('')}
-      </div>
-    `;
-    searchResults.appendChild(card);
-  });
-}
-
-if (chatForm && chatInput && chatMessages) {
-  chatForm.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const query = chatInput.value.trim();
-    if (!query) return;
-
-    appendMessage('user', query);
-    chatInput.value = '';
-
-    try {
-      const response = await fetch('/api/search', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('price_ai_token') || ''}`
-        },
-        body: JSON.stringify({ query })
-      });
-
-      if (response.status === 401) {
-        handleAuthFailure();
-        return;
-      }
-
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || 'Search failed');
-      appendMessage('ai', data.answer || 'No answer found.');
-      renderProducts(data.products || []);
-    } catch (error) {
-      appendMessage('ai', error.message);
+    if (globalSearch) {
+        globalSearch.addEventListener("keypress", (e) => {
+            if (e.key === "Enter" && globalSearch.value.trim()) {
+                chatInput.value = globalSearch.value;
+                chatForm.dispatchEvent(new Event("submit"));
+                globalSearch.value = "";
+                document.getElementById("chat-section").scrollIntoView({ behavior: "smooth" });
+            }
+        });
     }
-  });
+
+    if (!chatForm || !chatInput || !chatBox) return;
+
+    chatForm.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const query = chatInput.value.trim();
+        if (!query) return;
+
+        appendMessage("user", query);
+        chatInput.value = "";
+
+        const loadingId = appendLoading();
+
+        try {
+            const res = await fetch("/api/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ query })
+            });
+
+            removeLoading(loadingId);
+
+            if (res.ok) {
+                const data = await res.json();
+                appendMessage("ai", data.answer);
+            } else {
+                appendMessage("ai", "Error: Unable to get a response from the server.");
+            }
+        } catch (err) {
+            removeLoading(loadingId);
+            appendMessage("ai", "Network connection error.");
+        }
+    });
+
+    function appendMessage(sender, text) {
+        const div = document.createElement("div");
+        div.className = `chat-bubble ${sender}`;
+
+        const icon = sender === "ai" ? "fa-robot" : "fa-user";
+        div.innerHTML = `
+            <i class="fa-solid ${icon} bubble-avatar"></i>
+            <div class="bubble-text">${formatMessage(text)}</div>
+        `;
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    function appendLoading() {
+        const id = "loading-" + Date.now();
+        const div = document.createElement("div");
+        div.id = id;
+        div.className = "chat-bubble ai";
+        div.innerHTML = `
+            <i class="fa-solid fa-robot bubble-avatar"></i>
+            <div class="bubble-text"><i class="fa-solid fa-spinner fa-spin"></i> Analyzing catalog & prices...</div>
+        `;
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+        return id;
+    }
+
+    function removeLoading(id) {
+        const el = document.getElementById(id);
+        if (el) el.remove();
+    }
+
+    function formatMessage(text) {
+        if (!text) return "";
+        let formatted = text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+
+        formatted = formatted.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+        formatted = formatted.replace(/\*(.*?)\*/g, '<em>$1</em>');
+        return formatted;
+    }
 }

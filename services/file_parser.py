@@ -1,142 +1,157 @@
 import csv
-import os
+import io
 import re
-import shutil
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List
-
-import pandas as pd
-import pdfplumber
-import pytesseract
-from PIL import Image
-
-
-def _resolve_tesseract_cmd() -> str | None:
-    configured = os.getenv("TESSERACT_CMD", "").strip()
-    if configured:
-        return configured
-
-    resolved = shutil.which("tesseract")
-    if resolved:
-        return resolved
-
-    candidates = [
-        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
-    ]
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            return candidate
-    return None
-
-
-pytesseract.pytesseract.tesseract_cmd = _resolve_tesseract_cmd() or "tesseract"
-
+from PyPDF2 import PdfReader
+import openpyxl
+from docx import Document
+from services.ai_extractor import AIExtractor
 
 class FileParser:
     @staticmethod
-    def allowed_file(filename: str) -> bool:
-        ext = Path(filename).suffix.lower().lstrip('.')
-        return ext in {"pdf", "png", "jpg", "jpeg", "xlsx", "xls", "csv"}
+    def parse_file(filename: str, file_bytes: bytes) -> list:
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+        if ext == "csv":
+            return FileParser._parse_csv(file_bytes, filename)
+        elif ext in ("xlsx", "xls"):
+            return FileParser._parse_excel(file_bytes, filename)
+        elif ext == "pdf":
+            return FileParser._parse_pdf(file_bytes, filename)
+        elif ext in ("docx", "doc"):
+            return FileParser._parse_docx(file_bytes, filename)
+        elif ext in ("txt", "json"):
+            return FileParser._parse_text(file_bytes, filename)
+        elif ext in ("jpg", "jpeg", "png", "webp"):
+            mime = "image/png" if ext == "png" else "image/jpeg"
+            return AIExtractor.extract_from_image(file_bytes, mime, filename)
+        else:
+            return FileParser._parse_text(file_bytes, filename)
 
     @staticmethod
-    def extract_text_from_pdf(file_path: str) -> str:
-        text_chunks: List[str] = []
+    def _normalize_key(key: str) -> str:
+        return re.sub(r'[^a-z0-9]', '', str(key).lower().strip())
+
+    @staticmethod
+    def _extract_price(val) -> float:
+        if val is None:
+            return 0.0
+        cleaned = re.sub(r'[^\d.]', '', str(val).replace(',', ''))
         try:
-            with pdfplumber.open(file_path) as pdf:
-                for page in pdf.pages:
-                    text = page.extract_text() or ""
-                    text_chunks.append(text)
-        except Exception:
-            return ""
-        return "\n".join(text_chunks)
+            return float(cleaned)
+        except ValueError:
+            return 0.0
 
     @staticmethod
-    def extract_text_from_image(file_path: str) -> str:
-        try:
-            image = Image.open(file_path)
-            text = pytesseract.image_to_string(image)
-            return text
-        except Exception:
-            return ""
+    def _parse_csv(file_bytes: bytes, filename: str) -> list:
+        content = file_bytes.decode("utf-8", errors="ignore")
+        stream = io.StringIO(content)
+        reader = csv.reader(stream)
+        rows = list(reader)
+        if not rows:
+            return []
+
+        headers = [FileParser._normalize_key(h) for h in rows[0]]
+        items = []
+
+        for row in rows[1:]:
+            if not row or not any(row):
+                continue
+            row_dict = {headers[i]: row[i] for i in range(min(len(headers), len(row)))}
+            item = FileParser._map_row(row_dict, filename)
+            if item.get("product_name") and item.get("price") > 0:
+                items.append(item)
+
+        return items
 
     @staticmethod
-    def extract_text_from_excel(file_path: str) -> str:
-        try:
-            df = pd.read_excel(file_path)
-            return df.to_string(index=False)
-        except Exception:
-            try:
-                df = pd.read_csv(file_path)
-                return df.to_string(index=False)
-            except Exception:
-                return ""
+    def _parse_excel(file_bytes: bytes, filename: str) -> list:
+        wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+        sheet = wb.active
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            return []
+
+        headers = [FileParser._normalize_key(h) for h in rows[0] if h is not None]
+        items = []
+
+        for row in rows[1:]:
+            if not row or not any(row):
+                continue
+            row_dict = {headers[i]: row[i] for i in range(min(len(headers), len(row)))}
+            item = FileParser._map_row(row_dict, filename)
+            if item.get("product_name") and item.get("price") > 0:
+                items.append(item)
+
+        return items
 
     @staticmethod
-    def extract_text_from_csv(file_path: str) -> str:
-        try:
-            with open(file_path, newline='', encoding='utf-8-sig') as csvfile:
-                reader = csv.reader(csvfile)
-                rows = list(reader)
-                return "\n".join([",".join(row) for row in rows])
-        except Exception:
-            return ""
+    def _map_row(row_dict: dict, filename: str) -> dict:
+        name = ""
+        for k in ("productname", "product", "item", "itemname", "title", "name", "description"):
+            if k in row_dict and row_dict[k]:
+                name = str(row_dict[k]).strip()
+                break
 
-    @staticmethod
-    def extract_text(file_path: str) -> str:
-        file_ext = Path(file_path).suffix.lower()
-        if file_ext == ".pdf":
-            return FileParser.extract_text_from_pdf(file_path)
-        if file_ext in {".png", ".jpg", ".jpeg"}:
-            return FileParser.extract_text_from_image(file_path)
-        if file_ext in {".xlsx", ".xls"}:
-            return FileParser.extract_text_from_excel(file_path)
-        if file_ext == ".csv":
-            return FileParser.extract_text_from_csv(file_path)
-        return ""
+        model = ""
+        for k in ("model", "modelno", "modelnumber", "sku", "partno", "code"):
+            if k in row_dict and row_dict[k]:
+                model = str(row_dict[k]).strip()
+                break
 
-    @staticmethod
-    def clean_text(text: str) -> str:
-        if not text:
-            return ""
-        text = text.replace('\r', '\n')
-        text = re.sub(r'\s+', ' ', text)
-        return text.strip()
+        supplier = ""
+        for k in ("supplier", "vendor", "brand", "source", "company", "seller"):
+            if k in row_dict and row_dict[k]:
+                supplier = str(row_dict[k]).strip()
+                break
 
-    @staticmethod
-    def parse_price_data(raw_text: str) -> Dict[str, Any]:
-        normalized = raw_text or ""
-        date_match = re.search(r'(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}|\d{4}/\d{2}/\d{2})', normalized)
-        date_value = ""
-        if date_match:
-            date_text = date_match.group(1)
-            try:
-                if '-' in date_text:
-                    date_value = datetime.strptime(date_text, '%Y-%m-%d').strftime('%Y-%m-%d')
-                elif '/' in date_text and len(date_text.split('/')[0]) == 2:
-                    date_value = datetime.strptime(date_text, '%d/%m/%Y').strftime('%Y-%m-%d')
-                elif '/' in date_text and len(date_text.split('/')[0]) == 4:
-                    date_value = datetime.strptime(date_text, '%Y/%m/%d').strftime('%Y-%m-%d')
-            except Exception:
-                date_value = ""
+        price = 0.0
+        for k in ("price", "cost", "rate", "amount", "unitprice"):
+            if k in row_dict and row_dict[k]:
+                price = FileParser._extract_price(row_dict[k])
+                break
 
-        price_match = re.search(r'(?:PKR|USD|EUR|GBP|AED|SAR|INR|CAD|AUD|TAX|Rs\.?|Rs\s*)\s*([0-9,]+\.?[0-9]*)', normalized, re.IGNORECASE)
-        price_value = 0.0
-        if price_match:
-            cleaned = price_match.group(1).replace(',', '')
-            try:
-                price_value = float(cleaned)
-            except ValueError:
-                price_value = 0.0
-
-        currency_match = re.search(r'\b(PKR|USD|EUR|GBP|AED|SAR|INR|CAD|AUD)\b', normalized, re.IGNORECASE)
         currency = "PKR"
-        if currency_match:
-            currency = currency_match.group(1).upper()
+        for k in ("currency", "curr", "cur"):
+            if k in row_dict and row_dict[k]:
+                currency = str(row_dict[k]).strip()
+                break
+
+        date_val = datetime.utcnow().strftime("%Y-%m-%d")
+        for k in ("date", "invoicedate", "entrydate", "createdat"):
+            if k in row_dict and row_dict[k]:
+                try:
+                    raw_d = str(row_dict[k]).split(" ")[0].strip()
+                    date_val = raw_d
+                except Exception:
+                    pass
+                break
 
         return {
-            "price": price_value,
+            "product_name": name,
+            "model": model,
+            "supplier": supplier,
+            "price": price,
             "currency": currency,
-            "date": date_value,
+            "date": date_val,
+            "source_file": filename
         }
+
+    @staticmethod
+    def _parse_pdf(file_bytes: bytes, filename: str) -> list:
+        reader = PdfReader(io.BytesIO(file_bytes))
+        full_text = ""
+        for page in reader.pages:
+            full_text += (page.extract_text() or "") + "\n"
+        return AIExtractor.extract_products_from_text(full_text, filename)
+
+    @staticmethod
+    def _parse_docx(file_bytes: bytes, filename: str) -> list:
+        doc = Document(io.BytesIO(file_bytes))
+        full_text = "\n".join([p.text for p in doc.paragraphs])
+        return AIExtractor.extract_products_from_text(full_text, filename)
+
+    @staticmethod
+    def _parse_text(file_bytes: bytes, filename: str) -> list:
+        text = file_bytes.decode("utf-8", errors="ignore")
+        return AIExtractor.extract_products_from_text(text, filename)

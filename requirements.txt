@@ -3,16 +3,9 @@ Flask-Cors==4.0.1
 python-dotenv==1.0.1
 supabase==2.7.4
 requests==2.32.3
-pandas==2.2.2
 openpyxl==3.1.5
 pdfplumber==0.11.4
 Pillow==10.4.0
-pytesseract==0.3.13
-sentence-transformers==3.1.0
-transformers==4.44.2
-torch==2.4.1
-numpy==1.26.4
 python-dateutil==2.9.0.post0
 PyJWT==2.9.0
-gunicorn
-opencv-python-headless
+gunicorn==23.0.0

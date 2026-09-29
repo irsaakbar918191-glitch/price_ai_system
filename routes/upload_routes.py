@@ -1,5 +1,6 @@
 from flask import Blueprint, request, jsonify, session
 from services.file_parser import FileParser
+from services.ai_extractor import AIExtractor
 from services.embedding_service import EmbeddingService
 from database.supabase_client import get_supabase
 from datetime import datetime
@@ -12,10 +13,10 @@ def is_admin():
 @upload_bp.route("/api/upload", methods=["POST"])
 def upload_file():
     if not is_admin():
-        return jsonify({"error": "Access Denied: Only admin can upload file."}), 403
+        return jsonify({"error": "Access Denied: Sirf admin inventory add ya upload kar sakta hai"}), 403
 
     if "file" not in request.files:
-        return jsonify({"error": "Upload the file."}), 400
+        return jsonify({"error": "Koi file upload nahi ki gayi"}), 400
 
     file = request.files["file"]
     if file.filename == "":
@@ -23,10 +24,15 @@ def upload_file():
 
     try:
         file_bytes = file.read()
-        extracted_items = FileParser.parse_file(file.filename, file_bytes)
+        raw_text = FileParser.extract_raw_text(file.filename, file_bytes)
+
+        if not raw_text or not raw_text.strip():
+            return jsonify({"error": "File se text extract nahi kiya ja saka. File clarity check karein."}), 422
+
+        extracted_items = AIExtractor.parse_text_to_products(raw_text, file.filename)
 
         if not extracted_items:
-            return jsonify({"error": "Can't extract data from the file."}), 422
+            return jsonify({"error": "Extracted text se products parse nahi ho sake."}), 422
 
         supabase = get_supabase()
         user_id = session.get("user_id")
@@ -37,11 +43,7 @@ def upload_file():
             if not product_name:
                 continue
 
-            try:
-                price = float(item.get("price", 0.0))
-            except (ValueError, TypeError):
-                price = 0.0
-
+            price = float(item.get("price", 0.0))
             model = item.get("model", "")
             supplier = item.get("supplier", "")
             currency = item.get("currency", "PKR")

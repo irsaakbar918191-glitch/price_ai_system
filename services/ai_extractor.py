@@ -1,157 +1,158 @@
 import json
-import base64
 import re
+import requests
 from datetime import datetime
-from groq import Groq
 from config import Config
+from services.table_parser import TableParser
+
 
 class AIExtractor:
-    @staticmethod
-    def extract_from_image(image_bytes: bytes, mime_type: str = "image/png", filename: str = "image_upload") -> list:
+    """Orchestrates structured product extraction from OCR text using deterministic parsing and LLM fallback."""
+
+    last_error: str = ""
+
+    @classmethod
+    def parse_text_to_products(cls, raw_text: str, filename: str) -> list[dict]:
+        """Parse raw document text into standardized product catalog items."""
+        cls.last_error = ""
+
+        if not raw_text or not raw_text.strip():
+            cls.last_error = "No readable text content provided for extraction."
+            print(f"[AIExtractor] {cls.last_error}")
+            return []
+
+        print(f"\n[AIExtractor] Processing input text ({len(raw_text)} chars) from: {filename}")
+
+        # Stage 1: Deterministic heuristic table parsing
+        direct_items = TableParser.parse(raw_text, filename)
+        if direct_items:
+            print(f"[AIExtractor] Direct table parser successfully extracted {len(direct_items)} items.")
+            return direct_items
+
+        print("[AIExtractor] Direct table parsing yielded no items. Delegating to LLM...")
+
+        # Stage 2: LLM Fallback (Groq)
+        return cls._extract_with_llm(raw_text, filename)
+
+    @classmethod
+    def _extract_with_llm(cls, raw_text: str, filename: str) -> list[dict]:
+        """Invoke Groq LLM to parse complex or unstructured document text."""
+        api_key = Config.GROQ_API_KEY
+        if not api_key:
+            cls.last_error = "GROQ_API_KEY is missing from environment configuration."
+            print(f"[AIExtractor Error] {cls.last_error}")
+            return []
+
         today_date = datetime.utcnow().strftime("%Y-%m-%d")
-        b64_img = base64.b64encode(image_bytes).decode("utf-8")
-        
-        prompt = f"""You are an advanced Visual Document and OCR Intelligence system.
-Analyze this image thoroughly, regardless of its design, orientation, or format (it could be an invoice, bill, inquiry sheet, cropped table, WhatsApp screenshot, or product tag).
+        prompt = f"""You are an industrial quote and catalog parser.
+Extract all product lines from the provided text into a JSON array of objects.
 
-Your goal: Identify EVERY product, part, material, or line item present in the visual.
+Required Schema:
+- product_name: Full item name/description (string)
+- model: Part number or SKU (string)
+- supplier: Manufacturer, vendor, or make (string)
+- price: Clean numeric unit price without commas (float)
+- currency: 'PKR' or detected currency (string)
+- date: Mentioned invoice/quote date or '{today_date}' (string)
+- source_file: '{filename}' (string)
 
-Instructions:
-1. "product_name": Extract the full item name or description (e.g. 'VMPA-KMS-H 533198', 'Filter Regulator Lubricator', 'Dell Inspiron').
-2. "model": Extract part numbers, serial codes, or SKU numbers if visible. If not visible, leave as empty string.
-3. "supplier": Extract any company name, brand, vendor, or make (e.g., 'Festo', 'Logitech', or general vendor). If none found, write 'Not Specified'.
-4. "price": Find the unit cost, rate, or amount associated with the item. Remove currency symbols, commas, and spaces. Convert into a clean floating-point number. IF NO PRICE OR RATE IS SHOWN IN THE IMAGE, SET IT TO 0.0 (DO NOT SKIP THE ITEM).
-5. "currency": Detect currency (e.g. 'PKR', 'USD', 'EUR'). If written as 'PAK RS' or 'Rs', convert to 'PKR'. Default is '{Config.DEFAULT_CURRENCY}'.
-6. "date": Extract any inquiry, quotation, or invoice date found in the visual (YYYY-MM-DD format). If no date is found, use '{today_date}'.
-7. "source_file": '{filename}'
+Raw Text:
+{raw_text[:7000]}
 
-Output Format:
-Return ONLY a valid JSON array of objects. Never include markdown code fences or conversational text.
-Example:
+Return valid JSON array only with NO conversational text:
 [
   {{
-    "product_name": "Sample Item",
-    "model": "SKU-123",
-    "supplier": "Not Specified",
-    "price": 0.0,
-    "currency": "{Config.DEFAULT_CURRENCY}",
+    "product_name": "Sample Product",
+    "model": "123456",
+    "supplier": "Festo",
+    "price": 1000.0,
+    "currency": "PKR",
     "date": "{today_date}",
     "source_file": "{filename}"
   }}
 ]
 """
-        client = None
-        if Config.GROQ_API_KEY:
-            try:
-                client = Groq(api_key=Config.GROQ_API_KEY)
-            except Exception:
-                client = None
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content": "You are a data extraction engine. Output valid JSON array only."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.1,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
 
-        if client:
-            models_to_run = [
-                "llama-3.2-11b-vision-preview",
-                "llama-3.2-90b-vision-preview",
-                Config.GROQ_VISION_MODEL
-            ]
-            for model_name in models_to_run:
-                try:
-                    res = client.chat.completions.create(
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": prompt},
-                                    {"type": "image_url", "image_url": {"url": f"data:{mime_type};base64,{b64_img}"}}
-                                ]
-                            }
-                        ],
-                        model=model_name,
-                        temperature=0.1
-                    )
-                    content = res.choices[0].message.content
-                    parsed = AIExtractor._clean_json(content, filename)
-                    if parsed and len(parsed) > 0:
-                        return parsed
-                except Exception:
-                    continue
+        try:
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+
+            if response.status_code == 200:
+                raw_json = response.json()["choices"][0]["message"]["content"]
+                items = cls._sanitize_json(raw_json, filename)
+                if items:
+                    print(f"[AIExtractor] LLM successfully parsed {len(items)} items.")
+                    return items
+                cls.last_error = "LLM returned valid response, but no structured items were found."
+            else:
+                cls.last_error = f"Groq API returned HTTP {response.status_code}: {response.text}"
+                print(f"[AIExtractor Error] {cls.last_error}")
+
+        except requests.RequestException as exc:
+            cls.last_error = f"Network communication error with Groq API: {str(exc)}"
+            print(f"[AIExtractor Exception] {cls.last_error}")
 
         return []
 
-    @staticmethod
-    def _clean_price(val) -> float:
-        if val is None:
-            return 0.0
-        cleaned = re.sub(r'[^0-9.]', '', str(val).replace(',', ''))
-        try:
-            return float(cleaned)
-        except ValueError:
-            return 0.0
-
-    @staticmethod
-    def _clean_json(text: str, filename: str) -> list:
+    @classmethod
+    def _sanitize_json(cls, text: str, filename: str) -> list[dict]:
+        """Strip markdown fences and deserialize JSON into validated product records."""
         if not text:
             return []
+
         cleaned = text.strip()
         if "```json" in cleaned:
             cleaned = cleaned.split("```json")[1].split("```")[0].strip()
         elif "```" in cleaned:
             cleaned = cleaned.split("```")[1].split("```")[0].strip()
 
+        start = cleaned.find("[")
+        end = cleaned.rfind("]")
+        if start != -1 and end != -1:
+            cleaned = cleaned[start : end + 1]
+
         try:
             parsed = json.loads(cleaned)
-            items = []
-            if isinstance(parsed, list):
-                items = parsed
-            elif isinstance(parsed, dict):
-                for val in parsed.values():
-                    if isinstance(val, list):
-                        items = val
-                        break
-                if not items:
-                    items = [parsed]
+            records = parsed if isinstance(parsed, list) else [parsed]
+            validated = []
 
-            valid_items = []
-            for item in items:
-                name = item.get("product_name") or item.get("item") or item.get("name") or item.get("description")
+            for record in records:
+                name = record.get("product_name") or record.get("item")
                 if not name:
                     continue
 
-                raw_price = item.get("price") or item.get("cost_unit") or item.get("rate") or 0.0
-                price = AIExtractor._clean_price(raw_price)
+                raw_price = record.get("price", 0.0)
+                price = float(re.sub(r"[^0-9.]", "", str(raw_price).replace(",", "")) or 0.0)
 
-                valid_items.append({
+                validated.append({
                     "product_name": str(name).strip(),
-                    "model": str(item.get("model", "")).strip(),
-                    "supplier": str(item.get("supplier", "Not Specified")).strip(),
+                    "model": str(record.get("model", "")).strip(),
+                    "supplier": str(record.get("supplier", "Festo")).strip(),
                     "price": price,
-                    "currency": str(item.get("currency", Config.DEFAULT_CURRENCY)).replace("PAK RS", "PKR").strip(),
-                    "date": item.get("date") or datetime.utcnow().strftime("%Y-%m-%d"),
-                    "source_file": filename
+                    "currency": str(record.get("currency", Config.DEFAULT_CURRENCY)).replace("PAK RS", "PKR").strip(),
+                    "date": record.get("date") or datetime.utcnow().strftime("%Y-%m-%d"),
+                    "source_file": filename,
                 })
-            return valid_items
-        except Exception:
-            return []
 
-    @staticmethod
-    def extract_products_from_text(raw_text: str, filename: str = "document") -> list:
-        today_date = datetime.utcnow().strftime("%Y-%m-%d")
-        prompt = f"""Extract all items, products, or supplier price quotes from the text into a clean JSON array with keys:
-product_name, model, supplier, price (numeric float, no commas), currency (default {Config.DEFAULT_CURRENCY}), date, source_file.
-Raw Text:
-{raw_text[:8000]}
-"""
-        if Config.GROQ_API_KEY:
-            try:
-                client = Groq(api_key=Config.GROQ_API_KEY)
-                completion = client.chat.completions.create(
-                    messages=[
-                        {"role": "system", "content": "You are a professional catalog parser. Output JSON array only."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    model="llama-3.3-70b-versatile",
-                    temperature=0.1
-                )
-                return AIExtractor._clean_json(completion.choices[0].message.content, filename)
-            except Exception:
-                pass
-        return []
+            return validated
+
+        except (json.JSONDecodeError, ValueError) as exc:
+            cls.last_error = f"JSON deserialization failed: {str(exc)}"
+            print(f"[AIExtractor Error] {cls.last_error}")
+            return []

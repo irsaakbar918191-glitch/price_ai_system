@@ -1,41 +1,71 @@
-from database.supabase_client import get_supabase
-from services.embedding_service import EmbeddingService
+import re
+import requests
 from groq import Groq
 from config import Config
-import requests
+from database.supabase_client import get_supabase
+from services.embedding_service import EmbeddingService
 
 class RAGSearch:
     @staticmethod
     def ask_price_assistant(query: str, user_id: str = None) -> dict:
         supabase = get_supabase()
-        query_vector = EmbeddingService.get_embedding(query)
-
         matched_products = []
-        try:
-            res = supabase.rpc("match_products", {
-                "query_embedding": query_vector,
-                "match_threshold": 0.05,
-                "match_count": 6
-            }).execute()
-            matched_products = res.data or []
-        except Exception:
+
+        # 1. Step 1: Query se Model/Code nikaal kar Direct Match karein (e.g. 533347, LFR-D-MIDI, Fast Cables)
+        tokens = re.findall(r'[A-Za-z0-9_\-\.]{3,}', query)
+        stopwords = {"show", "details", "for", "model", "price", "what", "find", "item", "rate", "the", "hai", "kya", "btao"}
+        search_terms = [t for t in tokens if t.lower() not in stopwords]
+
+        for term in search_terms:
             try:
-                res = supabase.table("products").select("id, title, description, category, price, currency, stock").limit(6).execute()
+                res = supabase.table("products").select("*").or_(
+                    f"model.ilike.%{term}%,product_name.ilike.%{term}%,supplier.ilike.%{term}%"
+                ).limit(6).execute()
+
+                if res.data:
+                    for item in res.data:
+                        if not any(p.get("id") == item.get("id") for p in matched_products):
+                            matched_products.append(item)
+            except Exception:
+                pass
+
+        # 2. Step 2: Agar direct match na mile, tab Vector Similarity Search chalayein
+        if not matched_products:
+            try:
+                query_vector = EmbeddingService.get_embedding(query)
+                res = supabase.rpc("match_products", {
+                    "query_embedding": query_vector,
+                    "match_threshold": 0.05,
+                    "match_count": 6
+                }).execute()
                 matched_products = res.data or []
             except Exception:
-                matched_products = []
+                try:
+                    res = supabase.table("products").select("*").limit(6).execute()
+                    matched_products = res.data or []
+                except Exception:
+                    matched_products = []
 
+        # 3. Step 3: Sahi Column Names ke sath Context banayein
         context_items = []
         for p in matched_products:
+            p_name = p.get('product_name') or 'Unknown'
+            p_model = p.get('model') or '-'
+            p_supplier = p.get('supplier') or 'Unknown'
+            p_price = p.get('price', 0)
+            p_currency = p.get('currency', 'PKR')
+            p_date = p.get('date', '')
+
             context_items.append(
-                f"- Product: {p.get('title')} | Price: {p.get('currency', 'PKR')} {p.get('price')} | Stock: {p.get('stock')} | Category: {p.get('category')} | Info: {p.get('description', '')}"
+                f"- Product: {p_name} | Model: {p_model} | Supplier: {p_supplier} | Price: {p_currency} {p_price:,.2f} | Date: {p_date}"
             )
+
         context_str = "\n".join(context_items) if context_items else "No direct database match found."
 
-        system_prompt = f"""You are a professional AI Price Intelligence Assistant for the marketplace.
+        system_prompt = f"""You are a professional AI Price Intelligence Assistant for industrial equipment and cables marketplace.
 Default Currency: {Config.DEFAULT_CURRENCY}
-Provide accurate, actionable pricing comparisons, stock availability, and market insights based on the available inventory.
-Keep your response clear, well-structured, and helpful.
+Provide accurate, actionable pricing comparisons, supplier details, and model specifications based on available inventory.
+Keep your response concise, clear, and helpful.
 
 Available Inventory Context:
 {context_str}
@@ -69,7 +99,7 @@ Available Inventory Context:
                             {"role": "user", "content": user_query}
                         ],
                         model=model_name,
-                        temperature=0.3
+                        temperature=0.2
                     )
                     return completion.choices[0].message.content
                 except Exception:
@@ -88,4 +118,4 @@ Available Inventory Context:
             except Exception:
                 pass
 
-        return f"Found product match in database, but LLM connection unavailable!. Matching items:\n{system_prompt}"
+        return f"Found product match in database, but LLM connection unavailable!\nMatching Context:\n{system_prompt}"
